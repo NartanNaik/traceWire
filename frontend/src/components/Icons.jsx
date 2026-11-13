@@ -89,6 +89,55 @@ export const IconLink = make(
 )
 export const IconArrowLeft = make(<path d="M19 12H5M11 6l-6 6 6 6" />)
 
+export const IconNote = make(
+  <>
+    <path d="M5 4h14a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-8l-4 4v-4H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" />
+    <path d="M8 9h8M8 12h5" />
+  </>
+)
+
+export const IconSmile = make(
+  <>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M8.5 14a4 4 0 0 0 7 0" />
+    <path d="M9 9.5h.01M15 9.5h.01" />
+  </>
+)
+export const IconReply = make(
+  <>
+    <path d="M9 7L4 12l5 5" />
+    <path d="M4 12h10a6 6 0 0 1 6 6v1" />
+  </>
+)
+export const IconChevronDown = make(<path d="M6 9l6 6 6-6" />)
+
+export const IconUser = make(
+  <>
+    <circle cx="12" cy="8" r="4" />
+    <path d="M4 21a8 8 0 0 1 16 0" />
+  </>
+)
+export const IconUsers = make(
+  <>
+    <circle cx="9" cy="8" r="3.5" />
+    <path d="M2.5 20a6.5 6.5 0 0 1 13 0" />
+    <path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14.2A6.5 6.5 0 0 1 21.5 20" />
+  </>
+)
+export const IconDownload = make(
+  <>
+    <path d="M12 4v12" />
+    <path d="M7 11l5 5 5-5" />
+    <path d="M4 20h16" />
+  </>
+)
+export const IconEdit = make(
+  <>
+    <path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z" />
+    <path d="M14 7l3 3" />
+  </>
+)
+
 export function Logo({ size = 28 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true" focusable="false">

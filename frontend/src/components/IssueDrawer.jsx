@@ -1,15 +1,31 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { IconArrowLeft, IconCheck, IconClose, IconFlag, IconTrash } from './Icons.jsx'
 import { formatDateTime } from '../lib/format.js'
+import Discussion from './Discussion.jsx'
 
 export default function IssueDrawer({
-  issues, numbers, pageNames, activeId, isOwner, userId, coarse,
+  issues, numbers, pageNames, activeId, isOwner, userId, ownerId, coarse,
+  comments, reactions, unread, defaultName,
   onSelect, onClose, onFocus, onToggle, onDelete,
+  onPostComment, onEditComment, onDeleteComment, onReact,
 }) {
   const [filter, setFilter] = useState('all')
+  const [query, setQuery] = useState('')
   const active = issues.find((i) => i.id === activeId) || null
-  const list = issues.filter((i) => filter === 'all' || i.status === filter)
   const openCount = issues.filter((i) => i.status === 'open').length
+
+  const q = query.trim().toLowerCase()
+  const list = issues.filter((i) => {
+    if (filter !== 'all' && i.status !== filter) return false
+    if (!q) return true
+    return [i.title, i.details, i.fix, i.author_name].some((t) => (t || '').toLowerCase().includes(q))
+  })
+
+  const counts = useMemo(() => {
+    const m = {}
+    comments.forEach((c) => { m[c.issue_id] = (m[c.issue_id] || 0) + 1 })
+    return m
+  }, [comments])
 
   return (
     <aside className="drawer" aria-label="Issues">
@@ -58,9 +74,34 @@ export default function IssueDrawer({
                 <button className="btn btn-sm btn-danger-ghost" onClick={() => onDelete(active)}><IconTrash /> Delete</button>
               )}
             </div>
+
+            <Discussion
+              key={active.id}
+              issue={active}
+              comments={comments}
+              reactions={reactions}
+              userId={userId}
+              ownerId={ownerId}
+              isOwner={isOwner}
+              defaultName={defaultName}
+              onPost={onPostComment}
+              onEdit={onEditComment}
+              onDelete={onDeleteComment}
+              onReact={onReact}
+            />
           </div>
         ) : (
           <>
+            {issues.length > 3 && (
+              <input
+                className="input search"
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search issues"
+                aria-label="Search issues"
+              />
+            )}
             <div className="chips" role="tablist" aria-label="Filter issues">
               {['all', 'open', 'resolved'].map((f) => (
                 <button key={f} className={`chip ${filter === f ? 'is-on' : ''}`} onClick={() => setFilter(f)} role="tab" aria-selected={filter === f}>
@@ -76,7 +117,7 @@ export default function IssueDrawer({
                     : coarse
                       ? 'No issues yet. Long-press a page to report one.'
                       : 'No issues yet. Right-click a page to report one.'
-                  : 'Nothing in this filter.'}
+                  : 'Nothing matches.'}
               </p>
             ) : (
               <ul className="issue-list">
@@ -86,8 +127,12 @@ export default function IssueDrawer({
                       <span className={`pin-badge ${i.status === 'resolved' ? 'is-resolved' : ''}`}>{numbers[i.id]}</span>
                       <span className="issue-row-text">
                         <strong>{i.title}</strong>
-                        <span className="muted small">{i.author_name} - {formatDateTime(i.created_at)}</span>
+                        <span className="muted small">
+                          {i.author_name} - {formatDateTime(i.created_at)}
+                          {counts[i.id] ? ` - ${counts[i.id]} ${counts[i.id] === 1 ? 'reply' : 'replies'}` : ''}
+                        </span>
                       </span>
+                      {unread.has(i.id) && <span className="unread-dot" title="New activity" aria-label="New activity" />}
                     </button>
                   </li>
                 ))}

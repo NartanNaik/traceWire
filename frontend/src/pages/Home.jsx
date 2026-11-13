@@ -15,6 +15,7 @@ export default function Home({ openHints }) {
 
   const [works, setWorks] = useState(null)
   const [shared, setShared] = useState([])
+  const [unread, setUnread] = useState({})
   const [code, setCode] = useState(params.get('code') || '')
   const [codeError, setCodeError] = useState('')
   const [joining, setJoining] = useState(false)
@@ -28,9 +29,29 @@ export default function Home({ openHints }) {
   const load = useCallback(() => {
     api.listWireframes(station.id).then(setWorks).catch((e) => { setWorks([]); toast(api.friendly(e), 'error') })
     api.listShared().then(setShared).catch(() => {})
+    api.listUnread()
+      .then((rows) => {
+        const m = {}
+        rows.forEach((r) => { m[r.wireframe_id] = (m[r.wireframe_id] || 0) + 1 })
+        setUnread(m)
+      })
+      .catch(() => {})
   }, [station.id, toast])
 
   useEffect(() => { load() }, [load])
+
+  // refresh when you come back to the tab (also renews image links)
+  useEffect(() => {
+    const onVisible = () => { if (document.visibilityState === 'visible') load() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [load])
+
+  const totalUnread = Object.values(unread).reduce((a, b) => a + b, 0)
+  useEffect(() => {
+    document.title = totalUnread ? `(${totalUnread}) Tracewire` : 'Tracewire'
+    return () => { document.title = 'Tracewire' }
+  }, [totalUnread])
 
   useEffect(() => {
     try {
@@ -145,7 +166,7 @@ export default function Home({ openHints }) {
         ) : (
           <div className="grid">
             {works.map((w) => (
-              <WorkCard key={w.id} work={w} onOpen={(x) => navigate(`/work/${x.id}`)} onShare={setShareWork} onDelete={setToDelete} />
+              <WorkCard key={w.id} work={w} unread={unread[w.id] || 0} onOpen={(x) => navigate(`/work/${x.id}`)} onShare={setShareWork} onDelete={setToDelete} />
             ))}
           </div>
         )}
@@ -181,6 +202,7 @@ export default function Home({ openHints }) {
                   <span className="code-sm">from {r.owner || 'a shared workspace'}</span>
                 </div>
                 <div className="row">
+                  {unread[r.id] > 0 && <span className="pill pill-warn">{unread[r.id]} new</span>}
                   <button className="btn btn-sm" onClick={() => navigate(`/work/${r.id}`)}>Open</button>
                   <button className="icon-btn" onClick={() => removeShared(r.id)} aria-label={`Remove ${r.title} from my list`} title="Remove from my list">
                     <IconTrash />
@@ -208,7 +230,7 @@ export default function Home({ openHints }) {
       {toDelete && (
         <ConfirmModal
           title="Delete this wireframe?"
-          message={`"${toDelete.title}" and all of its images, wires and issues will be permanently removed from the database.`}
+          message={`"${toDelete.title}" and all of its images, wires, issues and replies will be permanently removed from the database.`}
           busy={deleting}
           onConfirm={confirmDelete}
           onClose={() => setToDelete(null)}

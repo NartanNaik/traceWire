@@ -4,13 +4,17 @@ import { useApp } from '../context.jsx'
 import * as api from '../lib/api.js'
 import WireCanvas from '../components/WireCanvas.jsx'
 import ShareModal from '../components/ShareModal.jsx'
-import { IconArrowLeft, IconLink } from '../components/Icons.jsx'
+import PeopleModal from '../components/PeopleModal.jsx'
+import ExportModal from '../components/ExportModal.jsx'
+import { IconArrowLeft, IconDownload, IconLink, IconUsers } from '../components/Icons.jsx'
 
 export default function Work() {
   const { workId } = useParams()
-  const { userId } = useApp()
+  const { userId, toast } = useApp()
   const [work, setWork] = useState(undefined)
-  const [share, setShare] = useState(false)
+  const [dialog, setDialog] = useState(null)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
 
   useEffect(() => {
     let alive = true
@@ -28,7 +32,7 @@ export default function Work() {
       <div className="page">
         <div className="card empty-card">
           <h2>Wireframe not found</h2>
-          <p className="muted">It may have been deleted, or you need to enter its code first.</p>
+          <p className="muted">It may have been deleted, you may have been removed, or you need to enter its code first.</p>
           <Link to="/" className="btn btn-primary">Back home</Link>
         </div>
       </div>
@@ -38,32 +42,74 @@ export default function Work() {
   const isOwner = work.stations.owner_id === userId
   const stationName = work.stations.display_name || 'a shared station'
 
+  const commitTitle = async () => {
+    setEditing(false)
+    const t = draft.trim()
+    if (!t || t === work.title) return
+    try {
+      const row = await api.renameWireframe(work.id, t)
+      setWork((w) => ({ ...w, title: row.title }))
+    } catch (err) {
+      toast(api.friendly(err), 'error')
+    }
+  }
+
   return (
     <div className="work-page">
       <div className="work-top">
         <Link className="btn btn-ghost btn-sm" to="/">
           <IconArrowLeft />
-          <span>Back</span>
+          <span className="hide-sm">Back</span>
         </Link>
         <div className="work-title">
-          <h1>{work.title}</h1>
+          {isOwner && editing ? (
+            <input
+              className="input title-input"
+              value={draft}
+              maxLength={120}
+              autoFocus
+              onChange={(e) => setDraft(e.target.value)}
+              onBlur={commitTitle}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') e.currentTarget.blur()
+                if (e.key === 'Escape') { setDraft(work.title); setEditing(false) }
+              }}
+              aria-label="Wireframe title"
+            />
+          ) : isOwner ? (
+            <h1>
+              <button className="title-btn" onClick={() => { setDraft(work.title); setEditing(true) }} title="Click to rename">{work.title}</button>
+            </h1>
+          ) : (
+            <h1>{work.title}</h1>
+          )}
           <span className={`pill ${isOwner ? 'pill-accent' : 'pill-warn'}`}>{isOwner ? 'Your wireframe' : `Reviewing ${stationName}`}</span>
         </div>
+        <button className="btn btn-sm" onClick={() => setDialog('export')} title="Export">
+          <IconDownload />
+          <span className="hide-sm">Export</span>
+        </button>
         {isOwner && (
-          <button className="btn btn-sm" onClick={() => setShare(true)}>
-            <IconLink />
-            <span>Share</span>
-          </button>
+          <>
+            <button className="btn btn-sm" onClick={() => setDialog('people')} title="People with access">
+              <IconUsers />
+              <span className="hide-sm">People</span>
+            </button>
+            <button className="btn btn-sm" onClick={() => setDialog('share')}>
+              <IconLink />
+              <span className="hide-sm">Share</span>
+            </button>
+          </>
         )}
       </div>
+
       <WireCanvas key={work.id} work={work} isOwner={isOwner} userId={userId} />
-      {share && (
-        <ShareModal
-          work={work}
-          onClose={() => setShare(false)}
-          onRegenerated={(id, code) => setWork((w) => ({ ...w, code }))}
-        />
+
+      {dialog === 'share' && (
+        <ShareModal work={work} onClose={() => setDialog(null)} onRegenerated={(id, code) => setWork((w) => ({ ...w, code }))} />
       )}
+      {dialog === 'people' && <PeopleModal work={work} onClose={() => setDialog(null)} />}
+      {dialog === 'export' && <ExportModal work={work} onClose={() => setDialog(null)} />}
     </div>
   )
 }

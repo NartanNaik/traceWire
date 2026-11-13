@@ -208,10 +208,22 @@ Events are debounced by 350 ms and trigger a refetch rather than patching state,
 - Configuration is two public environment variables, `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`. They are inlined at build time, so changing them requires a redeploy.
 - The backend is a Supabase project initialized by `backend/migrations/*.sql`.
 
-## Known limitations and trade-offs
+## Reliability and safety (v1.0)
 
-- **Session-bound ownership.** Anonymous auth removes sign-up friction but ties ownership to one browser profile. Adding Supabase's "link identity" to an email or OAuth account would make ownership portable without changing the data model.
-- **Shareable codes.** A code grants read and comment access to whoever holds it. Revoking means regenerating, which revokes everyone at once. Per-reviewer revocation would need an invite table with one code per reviewer.
-- **Last write wins.** Only the owner edits layout, so there are no edit conflicts. Reviewers' simultaneous issues are independent rows.
-- **Refetch on realtime events** is simple but sends more data than a patch would. It is fine for the expected sizes (tens of pages).
-- **Storage URLs expire** after 6 hours. A tab left open longer will show broken images until the page is reloaded.
+- **Guaranteed file cleanup.** Database triggers write the path of every deleted page image or reply image into `storage_trash`. The owner's app empties that queue on start and after deletes, so files are removed even when a reviewer made the deletion or the browser closed halfway.
+- **Unread tracking.** `issue_reads` stores when each person last opened an issue. `unread_issues()` returns issues that are new to the caller or have replies from others since they last read. Realtime inserts show a toast and update the tab title.
+- **Portable identity.** Anonymous users can link an email with `updateUser({ email })`, which keeps the same user id. Signing in on another device with a magic link loads the same workspace.
+- **Individual access control.** `wireframe_blocks` plus `set_reviewer_access` remove one reviewer without changing the code. `join_wireframe` refuses blocked users.
+- **Abuse limits.** Triggers cap wireframes per workspace (50), pages per wireframe (60), issues per wireframe (300), reply images per person per wireframe (40), and rate-limit issues, replies and reactions per minute.
+- **Consistency.** Triggers verify that pages, wires and issues reference the same wireframe, and column-level grants limit which fields clients can change.
+- **Pagination.** Every list is read in pages of 1000 rows.
+- **Fresh image links.** Signed URLs last 2 hours and are renewed every 40 minutes, on tab focus, and when an image fails to load.
+- **Delivery.** `vercel.json` sets a strict Content Security Policy (no inline scripts), clickjacking protection and long-lived caching for hashed assets.
+
+## Known limitations
+
+- Without a linked email, ownership is tied to the browser profile.
+- Reviewers are identified by anonymous sessions, so a removed reviewer can return only by getting a new code.
+- Two owner devices editing at the same moment resolve as last write wins, but each re-syncs when its tab regains focus.
+- Reply images that a reviewer deletes are physically removed the next time the owner opens the app.
+- Magic-link email delivery depends on your SMTP provider and its limits.

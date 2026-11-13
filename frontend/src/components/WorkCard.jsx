@@ -1,9 +1,10 @@
 import { formatDate } from '../lib/format.js'
 import { IconImage, IconLink, IconTrash } from './Icons.jsx'
 
-export default function WorkCard({ work, onOpen, onShare, onDelete }) {
+export default function WorkCard({ work, unread = 0, onOpen, onShare, onDelete }) {
   return (
     <article className="work-card">
+      {unread > 0 && <span className="unread-badge" title={`${unread} new`}>{unread} new</span>}
       <button className="work-open" onClick={() => onOpen(work)} aria-label={`Open ${work.title}`}>
         <div className="thumb">
           {work.thumb ? <img src={work.thumb} alt="" loading="lazy" draggable="false" /> : <IconImage width={28} height={28} />}
