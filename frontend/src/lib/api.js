@@ -18,11 +18,15 @@ export function friendly(err) {
   if (/wireframes_station_title_key/.test(msg)) return 'You already have a wireframe with that name. Choose a different name.'
   if (/wireframes_code_key/.test(msg)) return 'Could not create a unique code. Please try again.'
   if (/code_not_found/.test(msg)) return 'No wireframe matches that code.'
+  if (/access_restricted/.test(msg)) return 'This wireframe is restricted. Ask the owner to invite your email, then sign in or link that email.'
   if (/access_blocked/.test(msg)) return 'The owner has removed your access to this wireframe.'
   if (/rate_limited/.test(msg)) return 'You are doing that too quickly. Wait a moment and try again.'
   const lim = msg.match(/limit_reached: (.+)/)
   if (lim) return lim[1]
   if (/inconsistent_reference|screens_size|links_coords|issues_pin/.test(msg)) return 'That change was rejected because the data was not valid.'
+  if (err && (err.code === 'email_exists' || /already been registered|already registered/i.test(msg))) {
+    return 'That email already has a Tracewire account. Use "Sign in on this device" instead.'
+  }
   if (/anonymous/i.test(msg) && /disabled|not enabled/i.test(msg)) {
     return 'Anonymous sign-ins are disabled. Enable them in Supabase under Authentication, Sign In / Providers.'
   }
@@ -120,8 +124,8 @@ async function removeFiles(paths, bucket = SCREEN_BUCKET) {
 
 /* ---------- guaranteed file cleanup ----------
    Deleting a page or reply queues its file in storage_trash (a database trigger).
-   The owner's app empties the queue, so files are removed even if a reviewer did the delete
-   or the browser closed halfway through. */
+   The owner's or an editor's app empties the queue, so files are removed even if the
+   browser closed halfway through. */
 async function sweepOnce() {
   const rows = await run(supabase.from('storage_trash').select('id,bucket,path').order('id', { ascending: true }).limit(200))
   if (!rows.length) return 0
@@ -164,32 +168,41 @@ async function runPool(items, limit, worker) {
   return results
 }
 
-/* ---------- joining shared wireframes ---------- */
+/* ---------- sharing and collaboration ---------- */
 export const joinWireframe = (code) => run(supabase.rpc('join_wireframe', { p_code: code }))
 export const regenerateCode = (wireframeId) => run(supabase.rpc('regenerate_wireframe_code', { p_id: wireframeId }))
+export const getRole = (wireframeId) => run(supabase.rpc('wireframe_role', { wid: wireframeId }))
+export const sharedWithMe = () => run(supabase.rpc('shared_with_me'))
 
-export async function leaveWireframe(wireframeId) {
+export async function leaveWireframe(wireframeId, email) {
   await run(supabase.from('wireframe_access').delete().eq('wireframe_id', wireframeId))
+  if (email) {
+    await run(supabase.from('wireframe_invites').delete().eq('wireframe_id', wireframeId).eq('email', email.toLowerCase()))
+  }
 }
 
-export async function listShared() {
-  const rows = await run(
-    supabase
-      .from('wireframe_access')
-      .select('created_at,wireframes(id,title,stations(display_name))')
-      .order('created_at', { ascending: false })
-  )
-  return rows
-    .filter((r) => r.wireframes)
-    .map((r) => ({
-      id: r.wireframes.id,
-      title: r.wireframes.title,
-      owner: r.wireframes.stations ? r.wireframes.stations.display_name : null,
-      joined_at: r.created_at,
-    }))
+export const updateSharing = (id, patch) =>
+  run(supabase.from('wireframes').update(patch).eq('id', id).select('id,general_access,general_role').single())
+
+export const listInvites = (wireframeId) =>
+  run(supabase.from('wireframe_invites').select('email,role,created_at').eq('wireframe_id', wireframeId).order('created_at', { ascending: true }))
+
+export async function addInvite(wireframeId, email, role) {
+  const { error } = await supabase.from('wireframe_invites').insert({ wireframe_id: wireframeId, email, role })
+  if (!error) return
+  if (error.code === '23505') {
+    await run(supabase.from('wireframe_invites').update({ role }).eq('wireframe_id', wireframeId).eq('email', email))
+    return
+  }
+  throw error
 }
 
-/* ---------- reviewers, unread ---------- */
+export const setInviteRole = (wireframeId, email, role) =>
+  run(supabase.from('wireframe_invites').update({ role }).eq('wireframe_id', wireframeId).eq('email', email))
+
+export const removeInvite = (wireframeId, email) =>
+  run(supabase.from('wireframe_invites').delete().eq('wireframe_id', wireframeId).eq('email', email))
+
 export const listReviewers = (wireframeId) => run(supabase.rpc('list_reviewers', { p_id: wireframeId }))
 export const setReviewerAccess = (wireframeId, userId, allow) =>
   run(supabase.rpc('set_reviewer_access', { p_id: wireframeId, p_user: userId, p_allow: allow }))
@@ -226,7 +239,7 @@ export async function listWireframes(stationId) {
 }
 
 export const getWork = (id) =>
-  run(supabase.from('wireframes').select('*,stations(id,code,display_name,owner_id)').eq('id', id).maybeSingle())
+  run(supabase.from('wireframes').select('*,stations(id,display_name,owner_id)').eq('id', id).maybeSingle())
 
 export const renameWireframe = (id, title) =>
   run(supabase.from('wireframes').update({ title }).eq('id', id).select('id,title').single())
@@ -255,15 +268,30 @@ export async function addScreens({ wireframeId, stationId, files, existing = [],
       return { path, width, height, name: baseName(file.name) }
     })
 
+    // x and y continue after wherever the pages are now; home_x and home_y continue the original layout
     let x = existing.length ? Math.max(...existing.map((s) => s.x + s.w)) + 80 : 0
+    let homeX = existing.length ? Math.max(...existing.map((s) => (s.home_x ?? s.x) + s.w)) + 80 : 0
     const y = existing.length ? Math.min(...existing.map((s) => s.y)) : 0
     let position = existing.length ? Math.max(...existing.map((s) => s.position)) + 1 : 0
 
     const rows = results.map((r) => {
       const w = Math.round(Math.min(r.width, r.width > r.height ? 640 : 360))
       const h = Math.max(1, Math.round((w * r.height) / r.width))
-      const row = { wireframe_id: wireframeId, station_id: stationId, name: r.name, image_path: r.path, x, y, w, h, position: position++ }
+      const row = {
+        wireframe_id: wireframeId,
+        station_id: stationId,
+        name: r.name,
+        image_path: r.path,
+        x,
+        y,
+        home_x: homeX,
+        home_y: 0,
+        w,
+        h,
+        position: position++,
+      }
       x += w + 80
+      homeX += w + 80
       return row
     })
     return await run(supabase.from('screens').insert(rows).select())
@@ -294,6 +322,8 @@ export async function deleteWireframe(id) {
 
 export const updateView = (id, v) =>
   run(supabase.from('wireframes').update({ view_x: v.x, view_y: v.y, view_zoom: v.zoom }).eq('id', id))
+
+export const resetLayout = (wireframeId) => run(supabase.rpc('reset_layout', { p_id: wireframeId }))
 
 /* ---------- canvas data ---------- */
 export const listIssues = (wireframeId) =>

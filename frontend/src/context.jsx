@@ -2,11 +2,15 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import { bootstrap, renameStation, friendly, sweepTrash } from './lib/api.js'
 import { configured, supabase } from './lib/supabase.js'
 import { Logo } from './components/Icons.jsx'
+import AccountModal from './components/AccountModal.jsx'
 
 const Ctx = createContext(null)
 export const useApp = () => useContext(Ctx)
 
-const accountOf = (user) => ({ isAnonymous: Boolean(user && user.is_anonymous), email: (user && user.email) || '' })
+const accountOf = (user) => ({
+  isAnonymous: Boolean(user && user.is_anonymous),
+  email: ((user && user.email) || '').toLowerCase(),
+})
 
 function Splash() {
   return (
@@ -33,6 +37,7 @@ function ErrorScreen({ message }) {
 export function AppProvider({ children }) {
   const [state, setState] = useState({ status: 'loading', station: null, userId: null, account: null, error: '' })
   const [toasts, setToasts] = useState([])
+  const [accountUi, setAccountUi] = useState(null)
   const idRef = useRef(0)
   const userRef = useRef(null)
 
@@ -41,6 +46,8 @@ export function AppProvider({ children }) {
     setToasts((t) => [...t, { id, message, tone }])
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4200)
   }, [])
+
+  const openAccount = useCallback((mode) => setAccountUi({ mode: mode || 'link' }), [])
 
   useEffect(() => {
     if (!configured) {
@@ -78,6 +85,22 @@ export function AppProvider({ children }) {
     return () => data.subscription.unsubscribe()
   }, [])
 
+  // an email confirmed on another device shows up here when you come back to this tab
+  useEffect(() => {
+    if (state.status !== 'ready' || !state.account.isAnonymous) return undefined
+    const onVisible = async () => {
+      if (document.visibilityState !== 'visible') return
+      try {
+        const { data } = await supabase.auth.getUser()
+        if (data && data.user && data.user.id === userRef.current) {
+          setState((s) => ({ ...s, account: accountOf(data.user) }))
+        }
+      } catch { /* ignore */ }
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [state.status, state.account])
+
   const updateStationName = useCallback(async (name) => {
     const row = await renameStation(state.station.id, name.trim())
     setState((s) => ({ ...s, station: row }))
@@ -87,8 +110,11 @@ export function AppProvider({ children }) {
   if (state.status === 'error') return <ErrorScreen message={state.error} />
 
   return (
-    <Ctx.Provider value={{ station: state.station, userId: state.userId, account: state.account, toast, updateStationName }}>
+    <Ctx.Provider
+      value={{ station: state.station, userId: state.userId, account: state.account, toast, updateStationName, openAccount }}
+    >
       {children}
+      {accountUi && <AccountModal initialMode={accountUi.mode} onClose={() => setAccountUi(null)} />}
       <div className="toasts" aria-live="polite">
         {toasts.map((t) => (
           <div key={t.id} className={`toast toast-${t.tone}`}>{t.message}</div>

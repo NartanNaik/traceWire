@@ -111,15 +111,18 @@ function Node({ c, depth, ctx }) {
             ))}
 
           <div className="comment-actions">
-            <ReactionBar
+                        <ReactionBar
               reactions={ctx.byComment[c.id] || []}
               userId={ctx.userId}
+              readOnly={!ctx.canComment}
               onToggle={(emoji) => ctx.onReact({ commentId: c.id, emoji })}
             />
-            <button type="button" className="btn btn-ghost btn-xs" onClick={() => ctx.setReplyTo(ctx.replyTo === c.id ? null : c.id)}>
-              <IconReply width={14} height={14} /> Reply
-            </button>
-            {mine && !editing && (
+            {ctx.canComment && (
+              <button type="button" className="btn btn-ghost btn-xs" onClick={() => ctx.setReplyTo(ctx.replyTo === c.id ? null : c.id)}>
+                <IconReply width={14} height={14} /> Reply
+              </button>
+            )}
+                        {mine && !editing && ctx.canComment && (
               <button type="button" className="btn btn-ghost btn-xs" onClick={() => ctx.setEditId(c.id)}>
                 <IconEdit width={14} height={14} /> Edit
               </button>
@@ -160,7 +163,7 @@ function Node({ c, depth, ctx }) {
   )
 }
 
-export default function Discussion({ issue, comments, reactions, userId, ownerId, isOwner, defaultName, onPost, onEdit, onDelete, onReact }) {
+export default function Discussion({ issue, comments, reactions, userId, ownerId, isOwner, canComment, defaultName, onPost, onEdit, onDelete, onReact }) {
   const { toast } = useApp()
   const [replyTo, setReplyTo] = useState(null)
   const [editId, setEditId] = useState(null)
@@ -247,6 +250,7 @@ export default function Discussion({ issue, comments, reactions, userId, ownerId
     userId,
     ownerId,
     isOwner,
+    canComment,
     urls,
     byComment,
     defaultName,
@@ -271,7 +275,7 @@ export default function Discussion({ issue, comments, reactions, userId, ownerId
         <span className="muted small">{count} {count === 1 ? 'reply' : 'replies'}</span>
       </div>
 
-      <ReactionBar reactions={issueReactions} userId={userId} onToggle={(emoji) => onReact({ issue, commentId: null, emoji })} />
+      <ReactionBar reactions={issueReactions} userId={userId} readOnly={!canComment} onToggle={(emoji) => onReact({ issue, commentId: null, emoji })} />
 
       {roots.length ? (
         <ul className="comments">
@@ -283,12 +287,16 @@ export default function Discussion({ issue, comments, reactions, userId, ownerId
         <p className="muted small">No replies yet. Start the conversation below.</p>
       )}
 
-      <Composer
-        defaultName={defaultName}
-        placeholder="Write a reply. Paste or attach an image, or add emojis."
-        submitLabel="Reply"
-        onSubmit={(v) => onPost({ issue, parentId: null, ...v })}
-      />
+            {canComment ? (
+        <Composer
+          defaultName={defaultName}
+          placeholder="Write a reply. Paste or attach an image, or add emojis."
+          submitLabel="Reply"
+          onSubmit={(v) => onPost({ issue, parentId: null, ...v })}
+        />
+      ) : (
+        <p className="muted small">You have view-only access, so you cannot reply. Ask the owner for comment access.</p>
+      )}
 
       {toDelete && (
         <ConfirmModal

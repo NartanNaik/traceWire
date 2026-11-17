@@ -138,6 +138,13 @@ export const IconEdit = make(
   </>
 )
 
+export const IconReset = make(
+  <>
+    <path d="M4 12a8 8 0 1 0 2.6-5.9" />
+    <path d="M4 4v4h4" />
+  </>
+)
+
 export function Logo({ size = 28 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true" focusable="false">

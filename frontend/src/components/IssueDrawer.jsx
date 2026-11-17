@@ -4,7 +4,7 @@ import { formatDateTime } from '../lib/format.js'
 import Discussion from './Discussion.jsx'
 
 export default function IssueDrawer({
-  issues, numbers, pageNames, activeId, isOwner, userId, ownerId, coarse,
+  issues, numbers, pageNames, activeId, isOwner, canEdit, canComment, userId, ownerId, coarse,
   comments, reactions, unread, defaultName,
   onSelect, onClose, onFocus, onToggle, onDelete,
   onPostComment, onEditComment, onDeleteComment, onReact,
@@ -26,6 +26,14 @@ export default function IssueDrawer({
     comments.forEach((c) => { m[c.issue_id] = (m[c.issue_id] || 0) + 1 })
     return m
   }, [comments])
+
+  const emptyText = canEdit
+    ? 'No issues yet. People with comment access can report problems by right-clicking a page.'
+    : canComment
+      ? coarse
+        ? 'No issues yet. Long-press a page to report one.'
+        : 'No issues yet. Right-click a page to report one.'
+      : 'No issues yet.'
 
   return (
     <aside className="drawer" aria-label="Issues">
@@ -65,7 +73,7 @@ export default function IssueDrawer({
             </div>
             <div className="row wrap">
               <button className="btn btn-sm" onClick={() => onFocus(active)}><IconFlag /> Go to pin</button>
-              {isOwner && (
+              {canEdit && (
                 <button className="btn btn-sm" onClick={() => onToggle(active)}>
                   <IconCheck /> {active.status === 'resolved' ? 'Reopen' : 'Mark resolved'}
                 </button>
@@ -83,6 +91,7 @@ export default function IssueDrawer({
               userId={userId}
               ownerId={ownerId}
               isOwner={isOwner}
+              canComment={canComment}
               defaultName={defaultName}
               onPost={onPostComment}
               onEdit={onEditComment}
@@ -110,15 +119,7 @@ export default function IssueDrawer({
               ))}
             </div>
             {list.length === 0 ? (
-              <p className="muted empty-note">
-                {issues.length === 0
-                  ? isOwner
-                    ? 'No issues yet. Reviewers can report problems by right-clicking a page.'
-                    : coarse
-                      ? 'No issues yet. Long-press a page to report one.'
-                      : 'No issues yet. Right-click a page to report one.'
-                  : 'Nothing matches.'}
-              </p>
+              <p className="muted empty-note">{issues.length === 0 ? emptyText : 'Nothing matches.'}</p>
             ) : (
               <ul className="issue-list">
                 {list.map((i) => (

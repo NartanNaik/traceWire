@@ -7,9 +7,10 @@ import CreateWireframeModal from '../components/CreateWireframeModal.jsx'
 import ShareModal from '../components/ShareModal.jsx'
 import { ConfirmModal } from '../components/Modal.jsx'
 import { IconPlus, IconTrash } from '../components/Icons.jsx'
+import { roleLabel } from '../lib/roles.js'
 
 export default function Home({ openHints }) {
-  const { station, toast, updateStationName } = useApp()
+   const { station, toast, updateStationName, account } = useApp()
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
 
@@ -28,7 +29,7 @@ export default function Home({ openHints }) {
 
   const load = useCallback(() => {
     api.listWireframes(station.id).then(setWorks).catch((e) => { setWorks([]); toast(api.friendly(e), 'error') })
-    api.listShared().then(setShared).catch(() => {})
+        api.sharedWithMe().then(setShared).catch(() => {})
     api.listUnread()
       .then((rows) => {
         const m = {}
@@ -112,7 +113,7 @@ export default function Home({ openHints }) {
 
   const removeShared = async (id) => {
     try {
-      await api.leaveWireframe(id)
+            await api.leaveWireframe(id, account.email)
       setShared((r) => r.filter((x) => x.id !== id))
     } catch (err) {
       toast(api.friendly(err), 'error')
@@ -199,7 +200,7 @@ export default function Home({ openHints }) {
               <li key={r.id} className="recent-row">
                 <div className="recent-text">
                   <strong>{r.title}</strong>
-                  <span className="code-sm">from {r.owner || 'a shared workspace'}</span>
+                                    <span className="code-sm">{roleLabel(r.role)} - from {r.owner_name || 'a shared workspace'}</span>
                 </div>
                 <div className="row">
                   {unread[r.id] > 0 && <span className="pill pill-warn">{unread[r.id]} new</span>}

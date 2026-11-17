@@ -3,9 +3,9 @@ import { useApp } from '../context.jsx'
 import { useTheme } from '../hooks/useTheme.js'
 import { IconHelp, IconMoon, IconSun, IconUser, Logo } from './Icons.jsx'
 
-export default function Header({ onHints, onAccount }) {
+export default function Header({ onHints }) {
   const { theme, toggle } = useTheme()
-  const { account } = useApp()
+  const { account, openAccount } = useApp()
   return (
     <header className="header">
       <Link to="/" className="brand" aria-label="Tracewire home">
@@ -19,7 +19,7 @@ export default function Header({ onHints, onAccount }) {
         </button>
         <button
           className="icon-btn account-btn"
-          onClick={onAccount}
+          onClick={() => openAccount('link')}
           aria-label="Account"
           title={account.isAnonymous ? 'Secure your account' : account.email}
         >

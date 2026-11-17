@@ -14,9 +14,9 @@ export default function HintsPanel({ onClose }) {
         <section>
           <h3>Sharing</h3>
           <ul>
-            <li>Every wireframe has its own code. Use the <strong>Share</strong> button to see it.</li>
-            <li>A reviewer pastes it into <strong>Open a shared wireframe</strong> and sees only that wireframe.</li>
-            <li><strong>People</strong> lists who joined. Remove one person, or generate a new code to cut off everyone.</li>
+            <li><strong>Share</strong> lets you invite people by email as Viewer, Commenter or Editor. They sign in with that email to open it.</li>
+            <li><strong>General access</strong> works like a link: keep it Restricted, or let anyone with the code open it as Viewer, Commenter or Editor.</li>
+            <li>Remove one person any time, or generate a new code to cut off everyone who joined with the old one.</li>
             <li><strong>Export</strong> downloads a Markdown report or a JSON backup.</li>
           </ul>
         </section>
@@ -26,10 +26,12 @@ export default function HintsPanel({ onClose }) {
           <ul>
             <li><strong>Create wireframe</strong> asks for a unique title and images. Click the title later to rename it.</li>
             <li><Key>Right-click</Key> a page to start a wire. It starts with a ball and ends with an arrow.</li>
+            <li><strong>Reset layout</strong> puts every page back in its original position. Editors can use it too.</li>
             <li><Key>Left-click</Key> another page to drop it. Dropping on empty space or pressing <Key>Esc</Key> cancels.</li>
             <li>Drag the ball or the arrow to adjust a wire. Click a wire, then press <Key>Delete</Key> to remove it.</li>
             <li>Hold the <Key>Middle mouse button</Key> and drag an image to move it, or drag empty space to pan.</li>
             <li><Key>Right-click</Key> a wire or <Key>double-click</Key> a page to write a note on it.</li>
+            <li><strong>Reset layout</strong> puts every page back in its original position. Editors can use it too.</li>
           </ul>
         </section>
 

@@ -8,13 +8,18 @@ import IssueForm from './IssueForm.jsx'
 import IssueDrawer from './IssueDrawer.jsx'
 import NoteModal from './NoteModal.jsx'
 import { ConfirmModal } from './Modal.jsx'
-import { IconClose, IconFit, IconImage, IconList, IconMinus, IconMove, IconNote, IconPlus, IconTrash } from './Icons.jsx'
+import { IconClose, IconFit, IconImage, IconList, IconMinus, IconMove, IconNote, IconPlus, IconReset, IconTrash } from './Icons.jsx'
 
 const MIN_ZOOM = 0.1
 const MAX_ZOOM = 3
 const URL_REFRESH_MS = 40 * 60 * 1000
 const isCoarse = () => typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(pointer: coarse)').matches
 const hasNote = (n) => Boolean(n && n.trim())
+const hueOf = (text) => {
+  let h = 0
+  for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) % 360
+  return h
+}
 
 function ScreenLabel({ screen, zoom, canEdit, onRename, onDelete, onNote }) {
   const [editing, setEditing] = useState(false)
@@ -74,8 +79,12 @@ function ScreenLabel({ screen, zoom, canEdit, onRename, onDelete, onNote }) {
   )
 }
 
-export default function WireCanvas({ work, isOwner, userId }) {
-  const { toast } = useApp()
+export default function WireCanvas({ work, role, userId }) {
+  const { toast, account } = useApp()
+  const isOwner = role === 'owner'
+  const canEdit = isOwner || role === 'editor'
+  const canComment = canEdit || role === 'commenter'
+
   const vpRef = useRef(null)
   const fileRef = useRef(null)
 
@@ -86,6 +95,7 @@ export default function WireCanvas({ work, isOwner, userId }) {
   const [comments, setComments] = useState([])
   const [reactions, setReactions] = useState([])
   const [unread, setUnread] = useState(() => new Set())
+  const [peers, setPeers] = useState([])
   const [urls, setUrls] = useState({})
   const [view, setView] = useState({ x: work.view_x, y: work.view_y, zoom: work.view_zoom })
   const [pending, setPending] = useState(null)
@@ -105,7 +115,7 @@ export default function WireCanvas({ work, isOwner, userId }) {
   const coarse = isCoarse()
 
   const live = useRef({})
-  live.current = { screens, links, view, pending, adjust, moveMode, isOwner, selectedLink, activeIssue, drawer }
+  live.current = { screens, links, view, pending, adjust, moveMode, canEdit, canComment, isOwner, selectedLink, activeIssue, drawer }
 
   const pointers = useRef(new Map())
   const gesture = useRef(null)
@@ -121,10 +131,11 @@ export default function WireCanvas({ work, isOwner, userId }) {
 
   /* ---------- saving ---------- */
   const flush = useCallback(async () => {
-    if (!isOwner) return
+    if (!canEdit) return
     clearTimeout(saveTimer.current)
     const ids = [...dirty.current]
-    if (!ids.length && !viewDirty.current) return
+    const saveView = isOwner && viewDirty.current
+    if (!ids.length && !saveView) return
     dirty.current.clear()
     viewDirty.current = false
     setSaveState('saving')
@@ -136,25 +147,25 @@ export default function WireCanvas({ work, isOwner, userId }) {
           const s = l.screens.find((x) => x.id === id)
           return s ? api.updateScreen(id, { x: s.x, y: s.y }) : Promise.resolve()
         }),
-        api.updateView(work.id, l.view),
+        ...(saveView ? [api.updateView(work.id, l.view)] : []),
       ])
       setSaveState(dirty.current.size || viewDirty.current ? 'dirty' : 'saved')
     } catch {
       ids.forEach((id) => dirty.current.add(id))
-      viewDirty.current = true
+      if (saveView) viewDirty.current = true
       setSaveState('error')
       saveTimer.current = setTimeout(flush, 5000)
     } finally {
       saving.current = false
     }
-  }, [isOwner, work.id])
+  }, [canEdit, isOwner, work.id])
 
   const scheduleSave = useCallback(() => {
-    if (!isOwner) return
+    if (!canEdit) return
     setSaveState('dirty')
     clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(flush, 700)
-  }, [isOwner, flush])
+  }, [canEdit, flush])
 
   useEffect(() => {
     const onHide = () => {
@@ -169,6 +180,7 @@ export default function WireCanvas({ work, isOwner, userId }) {
     }
   }, [flush])
 
+  // only the owner's pan and zoom is saved with the wireframe
   const applyView = useCallback(
     (next) => {
       live.current.view = next
@@ -246,14 +258,14 @@ export default function WireCanvas({ work, isOwner, userId }) {
       refreshUrls()
       refreshUnread()
       const l = live.current
-      const busyOwner = isOwner && (dirty.current.size || viewDirty.current || saving.current || l.adjust || l.pending)
-      if (!busyOwner) loadAll(false)
+      const busyEditor = canEdit && (dirty.current.size || viewDirty.current || saving.current || l.adjust || l.pending)
+      if (!busyEditor) loadAll(false)
     }
     document.addEventListener('visibilitychange', onVisible)
     return () => document.removeEventListener('visibilitychange', onVisible)
-  }, [isOwner, loadAll, refreshUrls, refreshUnread])
+  }, [canEdit, loadAll, refreshUrls, refreshUnread])
 
-  /* ---------- realtime ---------- */
+  /* ---------- realtime and presence ---------- */
   useEffect(() => {
     const timers = []
     const debounced = (fn) => {
@@ -268,7 +280,24 @@ export default function WireCanvas({ work, isOwner, userId }) {
       api.fetchDiscussion(work.id).then((d) => { setComments(d.comments); setReactions(d.reactions) }).catch(() => {})
     )
     const reloadIssues = debounced(() => api.listIssues(work.id).then(setIssues).catch(() => {}))
-    const reloadEverything = debounced(() => loadAll(false))
+
+    // other people's page and wire changes: wait until you are not dragging or saving, then re-sync
+    let canvasTimer
+    const reloadCanvas = () => {
+      clearTimeout(canvasTimer)
+      const attempt = () => {
+        const l = live.current
+        const busyNow = dirty.current.size > 0 || viewDirty.current || saving.current || gesture.current || l.adjust || l.pending
+        if (busyNow) {
+          canvasTimer = setTimeout(attempt, 1200)
+          timers.push(canvasTimer)
+          return
+        }
+        loadAll(false)
+      }
+      canvasTimer = setTimeout(attempt, 350)
+      timers.push(canvasTimer)
+    }
 
     const notify = (table, row) => {
       if (!row || row.author_id === userId) return
@@ -284,7 +313,8 @@ export default function WireCanvas({ work, isOwner, userId }) {
       }
     }
 
-    const channel = supabase.channel(`work:${work.id}`)
+    const myName = safeGet('tracewire.name') || (isOwner && work.stations.display_name) || account.email || 'Guest'
+    const channel = supabase.channel(`work:${work.id}`, { config: { presence: { key: userId } } })
     const filter = `wireframe_id=eq.${work.id}`
     const on = (table, reload) =>
       channel.on('postgres_changes', { event: '*', schema: 'public', table, filter }, (payload) => {
@@ -292,22 +322,29 @@ export default function WireCanvas({ work, isOwner, userId }) {
         reload()
       })
 
-    if (isOwner) {
-      on('issues', reloadIssues)
-    } else {
-      on('issues', reloadEverything)
-      on('screens', reloadEverything)
-      on('links', reloadEverything)
-    }
+    on('issues', reloadIssues)
+    on('screens', reloadCanvas)
+    on('links', reloadCanvas)
     on('issue_comments', reloadDiscussion)
     on('reactions', reloadDiscussion)
 
-    channel.subscribe()
+    channel.on('presence', { event: 'sync' }, () => {
+      const state = channel.presenceState()
+      setPeers(
+        Object.entries(state)
+          .filter(([key]) => key !== userId)
+          .map(([key, metas]) => ({ key, ...(metas[metas.length - 1] || {}) }))
+      )
+    })
+
+    channel.subscribe((status) => {
+      if (status === 'SUBSCRIBED') channel.track({ name: myName, role })
+    })
     return () => {
       timers.forEach(clearTimeout)
       supabase.removeChannel(channel)
     }
-  }, [work.id, isOwner, loadAll, userId, toast])
+  }, [work.id, work.stations.display_name, isOwner, role, loadAll, userId, toast, account.email])
 
   /* ---------- tab title shows unread ---------- */
   useEffect(() => {
@@ -441,7 +478,7 @@ export default function WireCanvas({ work, isOwner, userId }) {
   }
 
   const adjustDown = (e, link, part) => {
-    if (!live.current.isOwner) return
+    if (!live.current.canEdit) return
     e.stopPropagation()
     e.preventDefault()
     e.currentTarget.setPointerCapture(e.pointerId)
@@ -479,7 +516,7 @@ export default function WireCanvas({ work, isOwner, userId }) {
       const l = live.current
       const w = toWorld(cx, cy)
       const s = hitScreen(l.screens, w.x, w.y)
-      if (l.isOwner) {
+      if (l.canEdit) {
         if (l.pending) return setPending(null)
         if (!s) return
         setSelectedLink(null)
@@ -493,7 +530,7 @@ export default function WireCanvas({ work, isOwner, userId }) {
           oy: cy,
           held: fromTouch,
         })
-      } else if (s) {
+      } else if (l.canComment && s) {
         setIssueDraft({
           screenId: s.id,
           px: clamp((w.x - s.x) / s.w, 0, 1),
@@ -521,13 +558,14 @@ export default function WireCanvas({ work, isOwner, userId }) {
     if (wireEl && !live.current.pending && !live.current.adjust) {
       const id = wireEl.getAttribute('data-wire')
       const link = live.current.links.find((x) => x.id === id)
-      if (link && (live.current.isOwner || hasNote(link.note))) {
+      if (link && (live.current.canEdit || hasNote(link.note))) {
         setNoteTarget({ kind: 'link', id })
         return
       }
     }
 
     if (e.target.closest('[data-ui]')) return
+    if (!live.current.canEdit && !live.current.canComment) return
     openContext(e.clientX, e.clientY, false)
   }
 
@@ -539,7 +577,7 @@ export default function WireCanvas({ work, isOwner, userId }) {
     const w = toWorld(e.clientX, e.clientY)
     const s = hitScreen(l.screens, w.x, w.y)
     if (!s) return
-    if (l.isOwner || hasNote(s.note)) setNoteTarget({ kind: 'screen', id: s.id })
+    if (l.canEdit || hasNote(s.note)) setNoteTarget({ kind: 'screen', id: s.id })
   }
 
   const onPointerDown = (e) => {
@@ -593,7 +631,7 @@ export default function WireCanvas({ work, isOwner, userId }) {
       }
     }
 
-    if (l.isOwner && s && (e.button === 1 || l.moveMode)) {
+    if (l.canEdit && s && (e.button === 1 || l.moveMode)) {
       gesture.current = { kind: 'move', id: s.id, sx: e.clientX, sy: e.clientY, ox: s.x, oy: s.y, moved: false }
     } else {
       gesture.current = { kind: 'pan', sx: e.clientX, sy: e.clientY, ox: l.view.x, oy: l.view.y, moved: false }
@@ -680,7 +718,7 @@ export default function WireCanvas({ work, isOwner, userId }) {
       if (e.key === 'Escape') {
         setPending(null)
         setSelectedLink(null)
-      } else if ((e.key === 'Delete' || e.key === 'Backspace') && l.isOwner && l.selectedLink) {
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && l.canEdit && l.selectedLink) {
         e.preventDefault()
         removeLink(l.selectedLink)
       } else if (e.key === '0') fit()
@@ -846,11 +884,19 @@ export default function WireCanvas({ work, isOwner, userId }) {
     setTimeout(() => setFreshIssue(null), 2400)
   }
 
-  const doDelete = async () => {
+  const doConfirm = async () => {
     if (!confirm) return
     setBusy(true)
     try {
-      if (confirm.kind === 'screen') {
+      if (confirm.kind === 'reset') {
+        clearTimeout(saveTimer.current)
+        dirty.current.clear()
+        await api.resetLayout(work.id)
+        setScreens((l) => l.map((s) => ({ ...s, x: s.home_x ?? s.x, y: s.home_y ?? s.y })))
+        setSaveState('saved')
+        setTimeout(fit, 60)
+        toast('Pages are back in their original positions.', 'success')
+      } else if (confirm.kind === 'screen') {
         const id = confirm.item.id
         await api.deleteScreen(confirm.item)
         const goneIds = issues.filter((i) => i.screen_id === id).map((i) => i.id)
@@ -879,6 +925,7 @@ export default function WireCanvas({ work, isOwner, userId }) {
   const screenById = useMemo(() => Object.fromEntries(screens.map((s) => [s.id, s])), [screens])
   const numbers = useMemo(() => Object.fromEntries(issues.map((i, idx) => [i.id, idx + 1])), [issues])
   const pageNames = useMemo(() => Object.fromEntries(screens.map((s) => [s.id, s.name])), [screens])
+  const layoutMoved = screens.some((s) => Math.abs(s.x - s.home_x) > 0.5 || Math.abs(s.y - s.home_y) > 0.5)
 
   const adjustLink = adjust ? links.find((l) => l.id === adjust.id) : null
   const cursorWorld = pending ? { x: pending.cx, y: pending.cy } : adjust ? { x: adjust.x, y: adjust.y } : null
@@ -907,8 +954,9 @@ export default function WireCanvas({ work, isOwner, userId }) {
   if (pending) hint = coarse ? 'Tap a page to drop the wire. Tap empty space to cancel.' : 'Left-click a page to drop the wire. Esc or a click on empty space cancels it.'
   else if (adjust) hint = 'Release over a page to move this end. Release anywhere else to cancel.'
   else if (!hintDismissed) {
-    if (isOwner) hint = coarse ? 'Long-press a page to start a wire. Tap a wire to add a note. Pinch to zoom.' : 'Right-click a page to start a wire. Right-click a wire or double-click a page to add a note. Middle-drag moves an image.'
-    else hint = coarse ? 'Long-press where you see a problem to report it. Pinch to zoom.' : 'Right-click where you see a problem to report it. Scroll pans, Ctrl + scroll zooms.'
+    if (canEdit) hint = coarse ? 'Long-press a page to start a wire. Tap a wire to add a note. Pinch to zoom.' : 'Right-click a page to start a wire. Right-click a wire or double-click a page to add a note. Middle-drag moves an image.'
+    else if (canComment) hint = coarse ? 'Long-press where you see a problem to report it. Pinch to zoom.' : 'Right-click where you see a problem to report it. Scroll pans, Ctrl + scroll zooms.'
+    else hint = 'You have view-only access. Scroll pans, Ctrl + scroll zooms. Click a pin to read its discussion.'
   }
 
   const saveLabel = { saved: 'Saved', dirty: 'Unsaved changes', saving: 'Saving...', error: 'Save failed, retrying' }[saveState]
@@ -969,7 +1017,7 @@ export default function WireCanvas({ work, isOwner, userId }) {
             onPointerCancel={() => setAdjust(null)}
           />
         </g>
-        {!adjust && selected && isOwner && (
+        {!adjust && selected && canEdit && (
           <g data-ui transform={`translate(${mid.x} ${mid.y}) scale(${inv})`}>
             <g className="wire-note" transform="translate(-18 0)" onClick={openNote}>
               <title>{noted ? 'Edit note' : 'Add note'}</title>
@@ -983,7 +1031,7 @@ export default function WireCanvas({ work, isOwner, userId }) {
             </g>
           </g>
         )}
-        {!adjust && !(selected && isOwner) && noted && (
+        {!adjust && !(selected && canEdit) && noted && (
           <g className="wire-note" data-ui transform={`translate(${mid.x} ${mid.y}) scale(${inv})`} onClick={openNote}>
             <title>Read note</title>
             <circle r={13} className="has-note" />
@@ -1015,11 +1063,30 @@ export default function WireCanvas({ work, isOwner, userId }) {
     )
   })()
 
+  const confirmCopy =
+    confirm && confirm.kind === 'reset'
+      ? {
+          title: 'Reset page positions?',
+          message: 'Every page goes back to its original position. Wires, notes and pins stay attached to their pages. Everyone with this wireframe open will see the change.',
+          label: 'Reset layout',
+        }
+      : confirm && confirm.kind === 'screen'
+        ? {
+            title: 'Delete this page?',
+            message: 'The image, its wires, issues and replies are permanently removed from the database.',
+            label: 'Delete',
+          }
+        : {
+            title: 'Delete this issue?',
+            message: 'This issue and its replies are permanently removed from the database.',
+            label: 'Delete',
+          }
+
   return (
-    <div className={`work ${isOwner ? 'is-owner' : 'is-viewer'}`}>
+    <div className={`work ${canEdit ? 'is-owner' : 'is-viewer'}`}>
       <div className="toolbar">
         <div className="toolbar-group">
-          {isOwner && (
+          {canEdit && (
             <>
               <button className="btn btn-sm" onClick={() => fileRef.current && fileRef.current.click()} disabled={Boolean(uploading)}>
                 <IconPlus />
@@ -1035,6 +1102,15 @@ export default function WireCanvas({ work, isOwner, userId }) {
                 <IconMove />
                 <span>Move images</span>
               </button>
+              <button
+                className="btn btn-sm"
+                onClick={() => setConfirm({ kind: 'reset' })}
+                disabled={!layoutMoved}
+                title={layoutMoved ? 'Put every page back in its original position' : 'Pages are already in their original positions'}
+              >
+                <IconReset />
+                <span className="hide-sm">Reset layout</span>
+              </button>
             </>
           )}
           <button className="btn btn-sm" onClick={fit} title="Fit everything (0)">
@@ -1043,7 +1119,22 @@ export default function WireCanvas({ work, isOwner, userId }) {
           </button>
         </div>
         <div className="toolbar-group">
-          {isOwner && <span className={`save-state save-${saveState}`} role="status">{saveLabel}</span>}
+          {peers.length > 0 && (
+            <div className="peers" aria-label={`${peers.length} other ${peers.length === 1 ? 'person' : 'people'} here`}>
+              {peers.slice(0, 4).map((p) => (
+                <span
+                  key={p.key}
+                  className="peer"
+                  style={{ background: `hsl(${hueOf(p.key)} 55% 40%)` }}
+                  title={`${p.name || 'Guest'} (${p.role || 'viewer'})`}
+                >
+                  {(p.name || '?').trim().charAt(0)}
+                </span>
+              ))}
+              {peers.length > 4 && <span className="peer peer-more">+{peers.length - 4}</span>}
+            </div>
+          )}
+          {canEdit && <span className={`save-state save-${saveState}`} role="status">{saveLabel}</span>}
           <button className={`btn btn-sm ${drawer ? 'btn-active' : ''}`} onClick={() => setDrawer((v) => !v)}>
             <IconList />
             <span>Issues</span>
@@ -1080,7 +1171,7 @@ export default function WireCanvas({ work, isOwner, userId }) {
                 <ScreenLabel
                   screen={s}
                   zoom={view.zoom}
-                  canEdit={isOwner}
+                  canEdit={canEdit}
                   onRename={renameScreen}
                   onDelete={(item) => setConfirm({ kind: 'screen', item })}
                   onNote={(item) => setNoteTarget({ kind: 'screen', id: item.id })}
@@ -1127,8 +1218,8 @@ export default function WireCanvas({ work, isOwner, userId }) {
               <div className="card empty-card">
                 <IconImage width={30} height={30} />
                 <h3>No pages yet</h3>
-                <p className="muted">{isOwner ? 'Add images to start wiring them together.' : 'The owner has not added any pages.'}</p>
-                {isOwner && <button className="btn btn-primary" onClick={() => fileRef.current && fileRef.current.click()}><IconPlus /> Add images</button>}
+                <p className="muted">{canEdit ? 'Add images to start wiring them together.' : 'There are no pages in this wireframe yet.'}</p>
+                {canEdit && <button className="btn btn-primary" onClick={() => fileRef.current && fileRef.current.click()}><IconPlus /> Add images</button>}
               </div>
             </div>
           )}
@@ -1158,6 +1249,8 @@ export default function WireCanvas({ work, isOwner, userId }) {
             pageNames={pageNames}
             activeId={activeIssue}
             isOwner={isOwner}
+            canEdit={canEdit}
+            canComment={canComment}
             userId={userId}
             ownerId={work.stations.owner_id}
             coarse={coarse}
@@ -1188,7 +1281,7 @@ export default function WireCanvas({ work, isOwner, userId }) {
           title={noteTitle}
           subtitle={noteSubtitle}
           note={noteItem.note || ''}
-          canEdit={isOwner}
+          canEdit={canEdit}
           onSave={saveNote}
           onClose={() => setNoteTarget(null)}
         />
@@ -1196,14 +1289,11 @@ export default function WireCanvas({ work, isOwner, userId }) {
 
       {confirm && (
         <ConfirmModal
-          title={confirm.kind === 'screen' ? 'Delete this page?' : 'Delete this issue?'}
-          message={
-            confirm.kind === 'screen'
-              ? 'The image, its wires, issues and replies are permanently removed from the database.'
-              : 'This issue and its replies are permanently removed from the database.'
-          }
+          title={confirmCopy.title}
+          message={confirmCopy.message}
+          confirmLabel={confirmCopy.label}
           busy={busy}
-          onConfirm={doDelete}
+          onConfirm={doConfirm}
           onClose={() => setConfirm(null)}
         />
       )}

@@ -3,9 +3,9 @@ import Modal from './Modal.jsx'
 import { useApp } from '../context.jsx'
 import * as api from '../lib/api.js'
 
-export default function AccountModal({ onClose }) {
+export default function AccountModal({ initialMode = 'link', onClose }) {
   const { account, station, userId, toast } = useApp()
-  const [mode, setMode] = useState('link')
+  const [mode, setMode] = useState(initialMode)
   const [email, setEmail] = useState('')
   const [sent, setSent] = useState('')
   const [busy, setBusy] = useState(false)
@@ -15,7 +15,7 @@ export default function AccountModal({ onClose }) {
 
   const send = async (e) => {
     e.preventDefault()
-    const value = email.trim()
+    const value = email.trim().toLowerCase()
     if (!/^\S+@\S+\.\S+$/.test(value)) return setError('Enter a valid email address.')
     setBusy(true)
     setError('')
@@ -24,7 +24,13 @@ export default function AccountModal({ onClose }) {
       else await api.signInWithEmail(value)
       setSent(value)
     } catch (err) {
-      setError(api.friendly(err))
+      const exists = err && (err.code === 'email_exists' || /already been registered|already registered/i.test(err.message || ''))
+      if (mode === 'link' && exists) {
+        setMode('signin')
+        setError('That email already has an account. Press Send link again to sign in with it.')
+      } else {
+        setError(api.friendly(err))
+      }
     } finally {
       setBusy(false)
     }
@@ -62,14 +68,14 @@ export default function AccountModal({ onClose }) {
             <div className="callout">
               <strong>Your account lives only in this browser.</strong>
               <p className="muted small">
-                If you clear site data or switch devices, you lose access to your wireframes. Link an email to keep them and sign in anywhere.
+                Link an email to keep your wireframes, sign in on any device, and open wireframes that owners shared with that email.
               </p>
             </div>
 
             {sent ? (
               <p className="muted">
                 {mode === 'link'
-                  ? `We sent a confirmation link to ${sent}. Open it on this device to finish linking.`
+                  ? `We sent a confirmation link to ${sent}. Open it to finish linking. Then reload this page.`
                   : `We sent a sign-in link to ${sent}. Open it to continue.`}
               </p>
             ) : (
@@ -80,8 +86,8 @@ export default function AccountModal({ onClose }) {
                 </div>
                 <p className="muted small">
                   {mode === 'link'
-                    ? 'Link the email you want to use. Your wireframes stay exactly as they are.'
-                    : 'Already linked an email on another device? Enter it to load your wireframes here. Anything created in this browser stays with this browser only.'}
+                    ? 'First time? Link the email you want to use. If someone invited you to a wireframe, use the exact email they invited. Your wireframes stay exactly as they are.'
+                    : 'Already linked this email before? Sign in to load your wireframes here. Anything created in this browser stays with this browser only.'}
                 </p>
                 <label className="field">
                   <span>Email</span>
@@ -95,7 +101,7 @@ export default function AccountModal({ onClose }) {
         ) : (
           <>
             <p>Signed in as <strong>{account.email}</strong>.</p>
-            <p className="muted small">Your wireframes follow this email. Sign in with it on any device to open them.</p>
+            <p className="muted small">Your wireframes follow this email, and so does any wireframe shared with it. Sign in with it on any device.</p>
             <div><button className="btn btn-sm" onClick={signOut}>Sign out</button></div>
           </>
         )}

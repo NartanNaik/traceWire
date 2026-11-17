@@ -3,7 +3,6 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { AppProvider } from './context.jsx'
 import Header from './components/Header.jsx'
 import HintsPanel from './components/HintsPanel.jsx'
-import AccountModal from './components/AccountModal.jsx'
 import Home from './pages/Home.jsx'
 import Work from './pages/Work.jsx'
 
@@ -24,7 +23,6 @@ function useOnline() {
 
 export default function App() {
   const [hints, setHints] = useState(false)
-  const [account, setAccount] = useState(false)
   const online = useOnline()
 
   useEffect(() => {
@@ -44,7 +42,7 @@ export default function App() {
   return (
     <AppProvider>
       <div className="app">
-        <Header onHints={() => setHints(true)} onAccount={() => setAccount(true)} />
+        <Header onHints={() => setHints(true)} />
         {!online && <div className="offline" role="status">You are offline. Changes will not save until you reconnect.</div>}
         <main className="main">
           <Routes>
@@ -54,7 +52,6 @@ export default function App() {
           </Routes>
         </main>
         {hints && <HintsPanel onClose={closeHints} />}
-        {account && <AccountModal onClose={() => setAccount(false)} />}
       </div>
     </AppProvider>
   )
