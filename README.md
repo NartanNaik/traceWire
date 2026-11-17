@@ -21,6 +21,7 @@ Upload screen images, connect them with wires (a ball at the start, an arrow at 
 - **Per-wireframe codes.** Every wireframe has its own code. Generate a new one to cut off everyone who used the old one.
 - **Manage people.** Change a role, remove one person, or restore someone you removed.
 - **Live collaboration.** Several editors can work at once. Changes appear within a second or two, and avatars show who is viewing right now.
+- **Administrator access.** The service operator can open and manage every wireframe, including restricted ones and ones shared before the roles existed, for support and moderation.
 
 **Feedback**
 - **Pinned issues** with reporter name, title, explanation, suggested fix, date and time. Editors can mark them resolved. Search and filter them.
@@ -47,8 +48,9 @@ Upload screen images, connect them with wires (a ball at the start, an arrow at 
 | Commenter | Everything a viewer can, plus report issues, reply and react |
 | Editor | Everything a commenter can, plus add, move and delete pages, draw and adjust wires, write notes, resolve issues and reset the layout |
 | Owner | Everything an editor can, plus rename, delete, share, manage people and generate new codes |
+| Administrator | The service operator. Has owner-level access to every wireframe without being invited, and sees an **All wireframes (administrator)** list on the home page |
 
-A person's role is the higher of their email invite and the general access role.
+A person's role is the higher of their email invite and the general access role. The administrator role is separate: it comes from a short list kept in the database, and only a confirmed email on a passwordless account counts.
 
 ## How sharing works
 
@@ -58,6 +60,8 @@ A person's role is the higher of their email invite and the general access role.
 4. If you chose Anyone with the code, send the code or the invite link. The person pastes it under **Open a shared wireframe**.
 
 An invitee who has never used Tracewire opens the link, clicks the account icon and links that email. Someone who already has an account signs in with it. The app does not send emails itself.
+
+Older codes and links keep working. Wireframes that were shared before roles existed stay on "Anyone with the code" as Commenter until the owner changes it.
 
 ## Controls
 
@@ -100,7 +104,7 @@ ARCHITECTURE.md   How the system works
 
 Requires Node 20.19 or newer and a free Supabase account.
 
-**1. Backend.** Follow [backend/README.md](backend/README.md): create the project, configure Auth and run the six migrations in order.
+**1. Backend.** Follow [backend/README.md](backend/README.md): create the project, configure Auth and run the seven migrations in order.
 
 **2. Frontend.**
 
@@ -146,16 +150,19 @@ Run these inside `frontend/`.
 4. Add the environment variables `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
 5. Deploy. `frontend/vercel.json` rewrites every route to `index.html` and sets security headers, including a strict Content Security Policy.
 
-**Supabase settings for production** (see [backend/README.md](backend/README.md)):
-- Set the **Site URL** to your Vercel URL and add it to the Redirect URLs.
+Every push to `main` redeploys automatically.
+
+**Supabase settings for production** (details in [backend/README.md](backend/README.md)):
+- Set the **Site URL** to your deployed address (for example `https://trace-wire.vercel.app`) and add it to the Redirect URLs. If you skip this, confirmation and sign-in emails send people to `http://localhost:3000`.
 - Keep **Confirm email** turned on.
 - Configure a custom **SMTP** provider, because the built-in email sender allows only a few emails per hour.
 
 ## Security model
 
 - All access control is enforced in the database by row-level security. The anon key alone cannot read anything.
-- One database function, `wireframe_role`, decides a person's role from ownership, a confirmed-email invite and the general access setting. Every table policy and storage rule is built from it.
+- One database function, `wireframe_role`, decides a person's role from ownership, administrator status, a confirmed-email invite and the general access setting. Every table policy and storage rule is built from it.
 - Invites match the signed-in user's **confirmed** email only. With "Confirm email" on, nobody can claim an address they do not own.
+- Administrator access requires a confirmed email on an account with no password, so nobody can register the administrator's address with a password and take over the role. The list of administrators is in a table no client can read.
 - Wireframe codes are generated on the server. Clients cannot choose or change them except through `regenerate_wireframe_code`.
 - Column-level permissions limit which fields each role can change, and database triggers check that pages, wires and issues belong to the same wireframe.
 - Quotas and rate limits stop abuse: 50 wireframes per workspace, 60 pages per wireframe, 300 issues per wireframe, 50 invites per wireframe, and per-minute limits on issues, replies and reactions.
@@ -167,6 +174,7 @@ Run these inside `frontend/`.
 - **No automatic invite emails.** Supabase only sends sign-in and confirmation emails. The Share dialog gives you a link and a prefilled email to send.
 - **Exact email match.** Invites match the address as typed (case ignored). Gmail dots and `+tags` count as different addresses.
 - **Without a linked email, ownership is tied to the browser profile.** Clearing site data loses access. Link an email in Account to avoid this.
+- **The administrator can open every wireframe.** This is for support and moderation, and the Share dialog tells people so. Anyone who controls the administrator's mailbox controls that role, so protect it with two-step verification.
 - **Same-moment edits.** Two editors changing the very same item at the same instant resolve as last write wins. Different items never conflict.
 - **Role changes reach an open screen within about a minute** or when the person returns to the tab. The database enforces them immediately.
 - **Only the owner's pan and zoom is saved** with the wireframe. Everyone else keeps their own view.

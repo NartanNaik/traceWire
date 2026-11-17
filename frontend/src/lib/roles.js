@@ -4,8 +4,14 @@ export const ROLES = [
   { value: 'editor', label: 'Editor', hint: 'Can view and edit' },
 ]
 
-const LABELS = { owner: 'Owner', editor: 'Can edit', commenter: 'Can comment', viewer: 'Can view' }
+const LABELS = {
+  admin: 'Administrator',
+  owner: 'Owner',
+  editor: 'Can edit',
+  commenter: 'Can comment',
+  viewer: 'Can view',
+}
 
 export const roleLabel = (role) => LABELS[role] || 'No access'
-export const canEdit = (role) => role === 'owner' || role === 'editor'
+export const canEdit = (role) => role === 'owner' || role === 'admin' || role === 'editor'
 export const canComment = (role) => canEdit(role) || role === 'commenter'

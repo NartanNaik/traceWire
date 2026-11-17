@@ -258,6 +258,7 @@ export default function ShareModal({ work, onClose, onChanged }) {
             </>
           )}
         </section>
+      <p className="muted small">The Tracewire administrator can also open every wireframe, for support and moderation.</p>
       </div>
     </Modal>
   )

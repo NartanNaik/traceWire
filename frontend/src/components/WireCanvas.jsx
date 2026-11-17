@@ -81,7 +81,7 @@ function ScreenLabel({ screen, zoom, canEdit, onRename, onDelete, onNote }) {
 
 export default function WireCanvas({ work, role, userId }) {
   const { toast, account } = useApp()
-  const isOwner = role === 'owner'
+    const isOwner = role === 'owner' || role === 'admin'
   const canEdit = isOwner || role === 'editor'
   const canComment = canEdit || role === 'commenter'
 
@@ -313,7 +313,7 @@ export default function WireCanvas({ work, role, userId }) {
       }
     }
 
-    const myName = safeGet('tracewire.name') || (isOwner && work.stations.display_name) || account.email || 'Guest'
+    const myName = safeGet('tracewire.name') || (role === 'owner' && work.stations.display_name) || account.email || 'Guest'
     const channel = supabase.channel(`work:${work.id}`, { config: { presence: { key: userId } } })
     const filter = `wireframe_id=eq.${work.id}`
     const on = (table, reload) =>
@@ -1257,7 +1257,7 @@ export default function WireCanvas({ work, role, userId }) {
             comments={comments}
             reactions={reactions}
             unread={unread}
-            defaultName={isOwner ? work.stations.display_name || 'Owner' : ''}
+            defaultName={role === 'owner' ? work.stations.display_name || 'Owner' : role === 'admin' ? 'Admin' : ''}
             onSelect={selectIssue}
             onClose={() => { setDrawer(false); setActiveIssue(null) }}
             onFocus={focusIssue}

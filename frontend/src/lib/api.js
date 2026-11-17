@@ -173,6 +173,7 @@ export const joinWireframe = (code) => run(supabase.rpc('join_wireframe', { p_co
 export const regenerateCode = (wireframeId) => run(supabase.rpc('regenerate_wireframe_code', { p_id: wireframeId }))
 export const getRole = (wireframeId) => run(supabase.rpc('wireframe_role', { wid: wireframeId }))
 export const sharedWithMe = () => run(supabase.rpc('shared_with_me'))
+export const listAllWireframes = () => run(supabase.rpc('admin_list_wireframes'))
 
 export async function leaveWireframe(wireframeId, email) {
   await run(supabase.from('wireframe_access').delete().eq('wireframe_id', wireframeId))

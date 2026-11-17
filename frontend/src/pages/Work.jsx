@@ -88,7 +88,7 @@ export default function Work() {
   }
 
   const { work, role } = state
-  const isOwner = role === 'owner'
+    const isOwner = role === 'owner' || role === 'admin'
   const stationName = work.stations.display_name || 'a shared workspace'
 
   const patchWork = (patch) => setState((s) => ({ ...s, work: { ...s.work, ...patch } }))
@@ -135,7 +135,7 @@ export default function Work() {
             <h1>{work.title}</h1>
           )}
           <span className={`pill ${isOwner ? 'pill-accent' : role === 'editor' ? 'pill-success' : 'pill-warn'}`}>
-            {isOwner ? 'Your wireframe' : `${roleLabel(role)} - ${stationName}`}
+            {role === 'admin' ? `Admin access - ${stationName}` : isOwner ? 'Your wireframe' : `${roleLabel(role)} - ${stationName}`}
           </span>
         </div>
         <button className="btn btn-sm" onClick={() => setDialog('export')} title="Export">

@@ -8,6 +8,7 @@ import ShareModal from '../components/ShareModal.jsx'
 import { ConfirmModal } from '../components/Modal.jsx'
 import { IconPlus, IconTrash } from '../components/Icons.jsx'
 import { roleLabel } from '../lib/roles.js'
+import { formatDate } from '../lib/format.js'
 
 export default function Home({ openHints }) {
    const { station, toast, updateStationName, account } = useApp()
@@ -26,10 +27,12 @@ export default function Home({ openHints }) {
   const [deleting, setDeleting] = useState(false)
   const [name, setName] = useState(station.display_name || '')
   const autoJoined = useRef(false)
+  const [allWork, setAllWork] = useState([])
 
   const load = useCallback(() => {
     api.listWireframes(station.id).then(setWorks).catch((e) => { setWorks([]); toast(api.friendly(e), 'error') })
         api.sharedWithMe().then(setShared).catch(() => {})
+        api.listAllWireframes().then(setAllWork).catch(() => {})
     api.listUnread()
       .then((rows) => {
         const m = {}
@@ -222,6 +225,25 @@ export default function Home({ openHints }) {
           onClose={() => setCreateOpen(false)}
           onCreated={(wf) => { setCreateOpen(false); navigate(`/work/${wf.id}`) }}
         />
+      )}
+
+            {allWork.length > 0 && (
+        <section>
+          <h2 className="h2">All wireframes (administrator)</h2>
+          <ul className="recent">
+            {allWork.map((r) => (
+              <li key={r.id} className="recent-row">
+                <div className="recent-text">
+                  <strong>{r.title}</strong>
+                  <span className="code-sm">
+                    {r.owner_name || 'Unnamed workspace'} - {r.pages} {Number(r.pages) === 1 ? 'page' : 'pages'} - {r.general_access === 'anyone' ? 'Code access' : 'Restricted'} - Updated {formatDate(r.updated_at)}
+                  </span>
+                </div>
+                <button className="btn btn-sm" onClick={() => navigate(`/work/${r.id}`)}>Open</button>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       {shareWork && (
