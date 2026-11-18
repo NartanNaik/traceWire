@@ -4,7 +4,6 @@ import { baseName } from './format.js'
 
 export const SCREEN_BUCKET = 'screens'
 export const COMMENT_BUCKET = 'comment-images'
-export const MAX_PAGES = 60
 const URL_TTL = 2 * 60 * 60
 const CONCURRENCY = 3
 const PAGE = 1000
@@ -97,7 +96,6 @@ export async function signOut() {
   if (error) throw error
 }
 
-/* ---------- signed image urls ---------- */
 export async function signPaths(paths, bucket = SCREEN_BUCKET, force = false) {
   const now = Date.now()
   const key = (p) => `${bucket}/${p}`
@@ -105,8 +103,8 @@ export async function signPaths(paths, bucket = SCREEN_BUCKET, force = false) {
     const c = urlCache.get(key(p))
     return force || !c || c.exp < now + 60000
   })
-  if (need.length) {
-    const { data, error } = await supabase.storage.from(bucket).createSignedUrls(need, URL_TTL)
+  for (let i = 0; i < need.length; i += 200) {
+    const { data, error } = await supabase.storage.from(bucket).createSignedUrls(need.slice(i, i + 200), URL_TTL)
     if (error) throw error
     data.forEach((d) => {
       if (d.signedUrl) urlCache.set(key(d.path), { url: d.signedUrl, exp: now + URL_TTL * 1000 })
@@ -246,9 +244,6 @@ export const renameWireframe = (id, title) =>
   run(supabase.from('wireframes').update({ title }).eq('id', id).select('id,title').single())
 
 export async function addScreens({ wireframeId, stationId, files, existing = [], onProgress }) {
-  if (existing.length + files.length > MAX_PAGES) {
-    throw new Error(`A wireframe can have at most ${MAX_PAGES} pages.`)
-  }
   const uploaded = []
   const total = files.length
   let finished = 0
@@ -325,6 +320,18 @@ export const updateView = (id, v) =>
   run(supabase.from('wireframes').update({ view_x: v.x, view_y: v.y, view_zoom: v.zoom }).eq('id', id))
 
 export const resetLayout = (wireframeId) => run(supabase.rpc('reset_layout', { p_id: wireframeId }))
+
+export const setLayout = (wireframeId, items) =>
+  run(supabase.rpc('set_layout', { p_id: wireframeId, p_items: items }))
+
+// pages and wires only (lighter than fetchCanvas), used to re-sync after other people's edits
+export async function fetchLayout(id) {
+  const [screens, links] = await Promise.all([
+    fetchAll(() => supabase.from('screens').select('*').eq('wireframe_id', id).order('position', { ascending: true }).order('id')),
+    fetchAll(() => supabase.from('links').select('*').eq('wireframe_id', id).order('created_at', { ascending: true }).order('id')),
+  ])
+  return { screens, links }
+}
 
 /* ---------- canvas data ---------- */
 export const listIssues = (wireframeId) =>

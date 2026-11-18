@@ -3,18 +3,24 @@ import { useApp } from '../context.jsx'
 import * as api from '../lib/api.js'
 import { supabase } from '../lib/supabase.js'
 import { clamp, hitScreen, wirePath } from '../lib/geometry.js'
+import { formatLayout } from '../lib/layout.js'
 import { safeGet, safeSet } from '../lib/format.js'
 import IssueForm from './IssueForm.jsx'
 import IssueDrawer from './IssueDrawer.jsx'
 import NoteModal from './NoteModal.jsx'
 import { ConfirmModal } from './Modal.jsx'
-import { IconClose, IconFit, IconImage, IconList, IconMinus, IconMove, IconNote, IconPlus, IconReset, IconTrash } from './Icons.jsx'
+import {
+  IconClose, IconFit, IconFormat, IconImage, IconList, IconMinus, IconMove, IconNote,
+  IconPlus, IconRedo, IconReset, IconTrash, IconUndo,
+} from './Icons.jsx'
 
 const MIN_ZOOM = 0.1
 const MAX_ZOOM = 3
 const URL_REFRESH_MS = 40 * 60 * 1000
+const HISTORY_LIMIT = 100
 const isCoarse = () => typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(pointer: coarse)').matches
 const hasNote = (n) => Boolean(n && n.trim())
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const hueOf = (text) => {
   let h = 0
   for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) % 360
@@ -81,7 +87,7 @@ function ScreenLabel({ screen, zoom, canEdit, onRename, onDelete, onNote }) {
 
 export default function WireCanvas({ work, role, userId }) {
   const { toast, account } = useApp()
-    const isOwner = role === 'owner' || role === 'admin'
+  const isOwner = role === 'owner' || role === 'admin'
   const canEdit = isOwner || role === 'editor'
   const canComment = canEdit || role === 'commenter'
 
@@ -111,6 +117,8 @@ export default function WireCanvas({ work, role, userId }) {
   const [uploading, setUploading] = useState(null)
   const [confirm, setConfirm] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [formatting, setFormatting] = useState(false)
+  const [histInfo, setHistInfo] = useState({ undo: 0, redo: 0, busy: false })
   const [hintDismissed, setHintDismissed] = useState(() => safeGet('tracewire.hint') === '1')
   const coarse = isCoarse()
 
@@ -128,6 +136,8 @@ export default function WireCanvas({ work, role, userId }) {
   const viewDirty = useRef(false)
   const fitted = useRef(false)
   const lastImgRefresh = useRef(0)
+  const history = useRef({ undo: [], redo: [] })
+  const histBusy = useRef(false)
 
   /* ---------- saving ---------- */
   const flush = useCallback(async () => {
@@ -167,6 +177,12 @@ export default function WireCanvas({ work, role, userId }) {
     saveTimer.current = setTimeout(flush, 700)
   }, [canEdit, flush])
 
+  // wait until nothing is waiting to be saved, so history steps never race with autosave
+  const settle = async () => {
+    await flush()
+    for (let i = 0; i < 40 && saving.current; i++) await sleep(100)
+  }
+
   useEffect(() => {
     const onHide = () => {
       if (document.visibilityState === 'hidden') flush()
@@ -192,6 +208,83 @@ export default function WireCanvas({ work, role, userId }) {
     },
     [isOwner, scheduleSave]
   )
+
+  /* ---------- undo and redo ---------- */
+  const syncHistory = useCallback(() => {
+    setHistInfo((h) => ({ ...h, undo: history.current.undo.length, redo: history.current.redo.length }))
+  }, [])
+
+  const record = useCallback(
+    (entry) => {
+      const h = history.current
+      h.undo.push(entry)
+      if (h.undo.length > HISTORY_LIMIT) h.undo.shift()
+      h.redo = []
+      syncHistory()
+    },
+    [syncHistory]
+  )
+
+  const runHistory = async (direction) => {
+    const h = history.current
+    const from = direction === 'undo' ? h.undo : h.redo
+    if (!canEdit || !from.length || histBusy.current) return
+    histBusy.current = true
+    setHistInfo((x) => ({ ...x, busy: true }))
+    const entry = from[from.length - 1]
+    try {
+      await settle()
+      await entry[direction]()
+      from.pop()
+      ;(direction === 'undo' ? h.redo : h.undo).push(entry)
+      toast(`${direction === 'undo' ? 'Undid' : 'Redid'}: ${entry.label}.`, 'info')
+    } catch (err) {
+      from.pop() // this step can no longer be applied (for example, someone removed the page)
+      toast(`Could not ${direction} "${entry.label}". ${api.friendly(err)}`, 'error')
+    } finally {
+      histBusy.current = false
+      setHistInfo({ undo: h.undo.length, redo: h.redo.length, busy: false })
+    }
+  }
+
+  // writes positions to the database in one step and updates the screen
+  const applyPositions = async (items) => {
+    items.forEach((i) => dirty.current.delete(i.id))
+    await api.setLayout(work.id, items)
+    const m = new Map(items.map((i) => [i.id, i]))
+    setScreens((l) => l.map((s) => (m.has(s.id) ? { ...s, x: m.get(s.id).x, y: m.get(s.id).y } : s)))
+  }
+
+  const applyLinkPatch = async (id, patch) => {
+    await api.updateLink(id, patch)
+    setLinks((l) => l.map((x) => (x.id === id ? { ...x, ...patch } : x)))
+  }
+
+  const dbDeleteLink = async (id) => {
+    await api.deleteLink(id)
+    setLinks((l) => l.filter((x) => x.id !== id))
+    setSelectedLink((s) => (s === id ? null : s))
+  }
+
+  const restoreLink = async (row) => {
+    const back = await api.insertLink(row)
+    setLinks((l) => (l.some((x) => x.id === back.id) ? l : [...l, back]))
+  }
+
+  const applyNote = async (kind, id, note) => {
+    if (kind === 'link') {
+      await api.updateLink(id, { note })
+      setLinks((l) => l.map((x) => (x.id === id ? { ...x, note } : x)))
+    } else {
+      await api.updateScreen(id, { note })
+      setScreens((l) => l.map((x) => (x.id === id ? { ...x, note } : x)))
+    }
+  }
+
+  const applyName = async (id, name) => {
+    await api.updateScreen(id, { name })
+    setScreens((l) => l.map((x) => (x.id === id ? { ...x, name } : x)))
+  }
 
   /* ---------- loading ---------- */
   const loadAll = useCallback(
@@ -281,19 +374,31 @@ export default function WireCanvas({ work, role, userId }) {
     )
     const reloadIssues = debounced(() => api.listIssues(work.id).then(setIssues).catch(() => {}))
 
+    const loadLayout = async () => {
+      try {
+        const d = await api.fetchLayout(work.id)
+        const map = await api.signPaths(d.screens.map((s) => s.image_path))
+        setUrls((u) => ({ ...u, ...map }))
+        setScreens(d.screens)
+        setLinks(d.links)
+      } catch {
+        /* the next change or a tab refocus will try again */
+      }
+    }
+
     // other people's page and wire changes: wait until you are not dragging or saving, then re-sync
     let canvasTimer
     const reloadCanvas = () => {
       clearTimeout(canvasTimer)
       const attempt = () => {
         const l = live.current
-        const busyNow = dirty.current.size > 0 || viewDirty.current || saving.current || gesture.current || l.adjust || l.pending
+        const busyNow = dirty.current.size > 0 || viewDirty.current || saving.current || histBusy.current || gesture.current || l.adjust || l.pending
         if (busyNow) {
           canvasTimer = setTimeout(attempt, 1200)
           timers.push(canvasTimer)
           return
         }
-        loadAll(false)
+        loadLayout()
       }
       canvasTimer = setTimeout(attempt, 350)
       timers.push(canvasTimer)
@@ -344,7 +449,7 @@ export default function WireCanvas({ work, role, userId }) {
       timers.forEach(clearTimeout)
       supabase.removeChannel(channel)
     }
-  }, [work.id, work.stations.display_name, isOwner, role, loadAll, userId, toast, account.email])
+  }, [work.id, work.stations.display_name, role, userId, toast, account.email])
 
   /* ---------- tab title shows unread ---------- */
   useEffect(() => {
@@ -429,6 +534,7 @@ export default function WireCanvas({ work, role, userId }) {
       const row = await api.insertLink({ ...payload, wireframe_id: work.id, station_id: work.station_id })
       setLinks((l) => [...l, row])
       setSelectedLink(row.id)
+      record({ label: 'add wire', undo: () => dbDeleteLink(row.id), redo: () => restoreLink(row) })
     } catch (err) {
       toast(api.friendly(err), 'error')
     }
@@ -439,6 +545,11 @@ export default function WireCanvas({ work, role, userId }) {
     setLinks((l) => l.map((x) => (x.id === id ? { ...x, ...patch } : x)))
     try {
       await api.updateLink(id, patch)
+      if (before) {
+        const prev = {}
+        Object.keys(patch).forEach((k) => { prev[k] = before[k] })
+        record({ label: 'move wire end', undo: () => applyLinkPatch(id, prev), redo: () => applyLinkPatch(id, patch) })
+      }
     } catch (err) {
       if (before) setLinks((l) => l.map((x) => (x.id === id ? before : x)))
       toast(api.friendly(err), 'error')
@@ -447,10 +558,12 @@ export default function WireCanvas({ work, role, userId }) {
 
   const removeLink = async (id) => {
     const before = live.current.links
+    const row = before.find((x) => x.id === id)
     setLinks((l) => l.filter((x) => x.id !== id))
     setSelectedLink(null)
     try {
       await api.deleteLink(id)
+      if (row) record({ label: 'remove wire', undo: () => restoreLink(row), redo: () => dbDeleteLink(id) })
     } catch (err) {
       setLinks(before)
       toast(api.friendly(err), 'error')
@@ -632,7 +745,7 @@ export default function WireCanvas({ work, role, userId }) {
     }
 
     if (l.canEdit && s && (e.button === 1 || l.moveMode)) {
-      gesture.current = { kind: 'move', id: s.id, sx: e.clientX, sy: e.clientY, ox: s.x, oy: s.y, moved: false }
+      gesture.current = { kind: 'move', id: s.id, sx: e.clientX, sy: e.clientY, ox: s.x, oy: s.y, lx: s.x, ly: s.y, moved: false }
     } else {
       gesture.current = { kind: 'pan', sx: e.clientX, sy: e.clientY, ox: l.view.x, oy: l.view.y, moved: false }
     }
@@ -672,8 +785,10 @@ export default function WireCanvas({ work, role, userId }) {
       const dx = (e.clientX - g.sx) / l.view.zoom
       const dy = (e.clientY - g.sy) / l.view.zoom
       g.moved = true
+      g.lx = g.ox + dx
+      g.ly = g.oy + dy
       dirty.current.add(g.id)
-      setScreens((list) => list.map((s) => (s.id === g.id ? { ...s, x: g.ox + dx, y: g.oy + dy } : s)))
+      setScreens((list) => list.map((s) => (s.id === g.id ? { ...s, x: g.lx, y: g.ly } : s)))
     }
   }
 
@@ -702,6 +817,16 @@ export default function WireCanvas({ work, role, userId }) {
         if (!g.moved && e.type === 'pointerup') setSelectedLink(null)
       } else if (g.kind === 'move') {
         scheduleSave()
+        if (g.moved && (Math.abs(g.lx - g.ox) > 0.5 || Math.abs(g.ly - g.oy) > 0.5)) {
+          const id = g.id
+          const before = { x: g.ox, y: g.oy }
+          const after = { x: g.lx, y: g.ly }
+          record({
+            label: 'move page',
+            undo: () => applyPositions([{ id, ...before }]),
+            redo: () => applyPositions([{ id, ...after }]),
+          })
+        }
       }
     }
     if (!g || g.kind !== 'pinch' || pointers.current.size === 0) gesture.current = null
@@ -715,6 +840,22 @@ export default function WireCanvas({ work, role, userId }) {
       if (t && (/INPUT|TEXTAREA|SELECT/.test(t.tagName) || t.isContentEditable)) return
       if (document.querySelector('.modal')) return
       const l = live.current
+
+      if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+        const k = e.key.toLowerCase()
+        if (k === 'z' && !e.shiftKey) {
+          e.preventDefault()
+          if (l.canEdit) runHistory('undo')
+          return
+        }
+        if ((k === 'z' && e.shiftKey) || k === 'y') {
+          e.preventDefault()
+          if (l.canEdit) runHistory('redo')
+          return
+        }
+        return
+      }
+
       if (e.key === 'Escape') {
         setPending(null)
         setSelectedLink(null)
@@ -747,6 +888,7 @@ export default function WireCanvas({ work, role, userId }) {
       setUrls((u) => ({ ...u, ...map }))
       setScreens((s) => [...s, ...rows])
       toast(`${rows.length} ${rows.length === 1 ? 'page' : 'pages'} added.`, 'success')
+      if (rows.length >= 8) toast('Many pages were added side by side. Press Format to arrange them.', 'info')
     } catch (err) {
       toast(api.friendly(err), 'error')
     } finally {
@@ -756,11 +898,43 @@ export default function WireCanvas({ work, role, userId }) {
 
   const renameScreen = async (id, name) => {
     const clean = name.trim().slice(0, 60) || 'Page'
+    const prev = (live.current.screens.find((s) => s.id === id) || {}).name
     setScreens((l) => l.map((s) => (s.id === id ? { ...s, name: clean } : s)))
     try {
       await api.updateScreen(id, { name: clean })
+      if (prev && prev !== clean) {
+        record({ label: 'rename page', undo: () => applyName(id, prev), redo: () => applyName(id, clean) })
+      }
     } catch (err) {
       toast(api.friendly(err), 'error')
+    }
+  }
+
+  /* ---------- format and reset ---------- */
+  const formatNow = async () => {
+    const l = live.current
+    if (!l.canEdit || !l.screens.length || formatting) return
+    setFormatting(true)
+    try {
+      await settle()
+      const current = live.current.screens
+      const laid = formatLayout(current, live.current.links)
+      const items = current.map((s) => ({ id: s.id, x: laid.get(s.id).x, y: laid.get(s.id).y }))
+      const changed = items.some((i, k) => Math.abs(i.x - current[k].x) > 0.5 || Math.abs(i.y - current[k].y) > 0.5)
+      if (!changed) {
+        toast('Pages are already formatted.', 'info')
+        return
+      }
+      const before = current.map((s) => ({ id: s.id, x: s.x, y: s.y }))
+      await applyPositions(items)
+      record({ label: 'format', undo: () => applyPositions(before), redo: () => applyPositions(items) })
+      setSaveState('saved')
+      setTimeout(fit, 60)
+      toast('Pages formatted. Every wire still starts and ends at the same spot on its page. Undo brings the old layout back.', 'success')
+    } catch (err) {
+      toast(api.friendly(err), 'error')
+    } finally {
+      setFormatting(false)
     }
   }
 
@@ -768,12 +942,15 @@ export default function WireCanvas({ work, role, userId }) {
   const saveNote = async (text) => {
     const t = noteTarget
     if (!t) return
-    if (t.kind === 'link') {
-      await api.updateLink(t.id, { note: text })
-      setLinks((l) => l.map((x) => (x.id === t.id ? { ...x, note: text } : x)))
-    } else {
-      await api.updateScreen(t.id, { note: text })
-      setScreens((l) => l.map((x) => (x.id === t.id ? { ...x, note: text } : x)))
+    const item = t.kind === 'link' ? live.current.links.find((x) => x.id === t.id) : live.current.screens.find((x) => x.id === t.id)
+    const prev = (item && item.note) || ''
+    await applyNote(t.kind, t.id, text)
+    if (prev !== text) {
+      record({
+        label: 'edit note',
+        undo: () => applyNote(t.kind, t.id, prev),
+        redo: () => applyNote(t.kind, t.id, text),
+      })
     }
     setNoteTarget(null)
   }
@@ -889,10 +1066,12 @@ export default function WireCanvas({ work, role, userId }) {
     setBusy(true)
     try {
       if (confirm.kind === 'reset') {
-        clearTimeout(saveTimer.current)
-        dirty.current.clear()
-        await api.resetLayout(work.id)
-        setScreens((l) => l.map((s) => ({ ...s, x: s.home_x ?? s.x, y: s.home_y ?? s.y })))
+        await settle()
+        const current = live.current.screens
+        const before = current.map((s) => ({ id: s.id, x: s.x, y: s.y }))
+        const after = current.map((s) => ({ id: s.id, x: s.home_x ?? s.x, y: s.home_y ?? s.y }))
+        await applyPositions(after)
+        record({ label: 'reset layout', undo: () => applyPositions(before), redo: () => applyPositions(after) })
         setSaveState('saved')
         setTimeout(fit, 60)
         toast('Pages are back in their original positions.', 'success')
@@ -954,7 +1133,7 @@ export default function WireCanvas({ work, role, userId }) {
   if (pending) hint = coarse ? 'Tap a page to drop the wire. Tap empty space to cancel.' : 'Left-click a page to drop the wire. Esc or a click on empty space cancels it.'
   else if (adjust) hint = 'Release over a page to move this end. Release anywhere else to cancel.'
   else if (!hintDismissed) {
-    if (canEdit) hint = coarse ? 'Long-press a page to start a wire. Tap a wire to add a note. Pinch to zoom.' : 'Right-click a page to start a wire. Right-click a wire or double-click a page to add a note. Middle-drag moves an image.'
+    if (canEdit) hint = coarse ? 'Long-press a page to start a wire. Tap a wire to add a note. Pinch to zoom.' : 'Right-click a page to start a wire. Right-click a wire or double-click a page to add a note. Press Format to tidy a big wireframe.'
     else if (canComment) hint = coarse ? 'Long-press where you see a problem to report it. Pinch to zoom.' : 'Right-click where you see a problem to report it. Scroll pans, Ctrl + scroll zooms.'
     else hint = 'You have view-only access. Scroll pans, Ctrl + scroll zooms. Click a pin to read its discussion.'
   }
@@ -1067,13 +1246,13 @@ export default function WireCanvas({ work, role, userId }) {
     confirm && confirm.kind === 'reset'
       ? {
           title: 'Reset page positions?',
-          message: 'Every page goes back to its original position. Wires, notes and pins stay attached to their pages. Everyone with this wireframe open will see the change.',
+          message: 'Every page goes back to its original position. Wires, notes and pins stay attached to their pages. Everyone with this wireframe open will see the change. You can undo it.',
           label: 'Reset layout',
         }
       : confirm && confirm.kind === 'screen'
         ? {
             title: 'Delete this page?',
-            message: 'The image, its wires, issues and replies are permanently removed from the database.',
+            message: 'The image, its wires, issues and replies are permanently removed from the database. This cannot be undone.',
             label: 'Delete',
           }
         : {
@@ -1094,6 +1273,26 @@ export default function WireCanvas({ work, role, userId }) {
               </button>
               <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={onFiles} />
               <button
+                className="btn btn-sm"
+                onClick={() => runHistory('undo')}
+                disabled={!histInfo.undo || histInfo.busy}
+                title="Undo (Ctrl+Z)"
+                aria-label="Undo"
+              >
+                <IconUndo />
+                <span className="hide-sm">Undo</span>
+              </button>
+              <button
+                className="btn btn-sm"
+                onClick={() => runHistory('redo')}
+                disabled={!histInfo.redo || histInfo.busy}
+                title="Redo (Ctrl+Shift+Z)"
+                aria-label="Redo"
+              >
+                <IconRedo />
+                <span className="hide-sm">Redo</span>
+              </button>
+              <button
                 className={`btn btn-sm ${moveMode ? 'btn-active' : ''}`}
                 aria-pressed={moveMode}
                 onClick={() => setMoveMode((v) => !v)}
@@ -1101,6 +1300,15 @@ export default function WireCanvas({ work, role, userId }) {
               >
                 <IconMove />
                 <span>Move images</span>
+              </button>
+              <button
+                className="btn btn-sm"
+                onClick={formatNow}
+                disabled={formatting || !screens.length}
+                title="Arrange the pages so the wires are easy to follow. Wires keep their exact spots on each page."
+              >
+                <IconFormat />
+                <span>{formatting ? 'Formatting...' : 'Format'}</span>
               </button>
               <button
                 className="btn btn-sm"
@@ -1177,7 +1385,7 @@ export default function WireCanvas({ work, role, userId }) {
                   onNote={(item) => setNoteTarget({ kind: 'screen', id: item.id })}
                 />
                 {urls[s.image_path] ? (
-                  <img src={urls[s.image_path]} alt={s.name} draggable="false" onError={onImgError} />
+                  <img src={urls[s.image_path]} alt={s.name} draggable="false" loading="lazy" decoding="async" onError={onImgError} />
                 ) : (
                   <div className="screen-missing"><IconImage width={26} height={26} /></div>
                 )}

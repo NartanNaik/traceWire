@@ -27,6 +27,8 @@ export default function HintsPanel({ onClose }) {
             <li><strong>Create wireframe</strong> asks for a unique title and images. Click the title later to rename it.</li>
             <li><Key>Right-click</Key> a page to start a wire. It starts with a ball and ends with an arrow.</li>
             <li><strong>Reset layout</strong> puts every page back in its original position. Editors can use it too.</li>
+            <li><strong>Format</strong> arranges a big wireframe so the wires are easy to follow. Each wire keeps its exact start and end spot on its pages, and you can undo it.</li>
+            <li><strong>Undo</strong> and <strong>Redo</strong> (<Key>Ctrl</Key> + <Key>Z</Key>, <Key>Ctrl</Key> + <Key>Shift</Key> + <Key>Z</Key>) cover page moves, wires, notes and renames. Adding or deleting pages cannot be undone.</li>
             <li><Key>Left-click</Key> another page to drop it. Dropping on empty space or pressing <Key>Esc</Key> cancels.</li>
             <li>Drag the ball or the arrow to adjust a wire. Click a wire, then press <Key>Delete</Key> to remove it.</li>
             <li>Hold the <Key>Middle mouse button</Key> and drag an image to move it, or drag empty space to pan.</li>
